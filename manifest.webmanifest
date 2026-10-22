@@ -1,0 +1,12 @@
+{
+  "name": "Pet Caramelo",
+  "short_name": "Pet Caramelo",
+  "description": "Saúde, estoque e gastos da Galera",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fffbef",
+  "theme_color": "#ffc629",
+  "icons": [{ "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
