@@ -7,7 +7,7 @@ Saúde, estoque e gastos de uma galera de gatos. HTML, CSS e JavaScript puros (m
 - **Gatos**: cadastro em lote (um nome por linha), ficha de cada um, arquivamento para adoção ou falecimento sem perder o histórico.
 - **Saúde**: vacina, vermífugo, consulta, exame, medicação, pesagem. Um mesmo registro pode valer para vários gatos (o vermífugo da Galera inteira de uma vez). Próxima dose gera pendência no painel.
 - **Documentos**: PDF ou foto de laudo, receita e carteirinha, guardados por gato num bucket privado (só com conta).
-- **Estoque**: areia e ração com estimativa de quanto sobrou e de quando acaba, sem precisar dar baixa todo dia.
+- **Estoque**: você registra a compra, marca a data em que **abriu o pacote** e, quando acaba, toca em **Acabou**. O app calcula quanto a Galera consome por dia, semana, mês e por gato, e prevê quando o pacote aberto deve acabar.
 - **Gastos**: por mês e por categoria. Compras do estoque e cuidados com valor entram nos gastos automaticamente.
 
 ## Rodar local

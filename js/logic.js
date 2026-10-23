@@ -206,6 +206,13 @@ export function comprarItem(state, c, now, id = newId) {
   return registrarCompra(s, { itemId, quantidade: c.quantidade, data: c.data, valorCentavos: c.valorCentavos, loja: c.loja }, now, id);
 }
 
+/** "Abri o pacote": guarda a data e o tamanho do pacote. Não mexe na estimativa de quanto sobra, só marca o início do uso. */
+export function abrirPacote(state, a, now, id = newId) {
+  if (!live(state.itens).some((i) => i.id === a.itemId)) throw new Error("Item não encontrado");
+  const mov = stamp({ id: id(), itemId: a.itemId, tipo: "abertura", quantidade: a.quantidade, data: a.data, gastoId: null }, now);
+  return { ...state, movimentos: [...state.movimentos, mov] };
+}
+
 export function registrarContagem(state, c, now, id = newId) {
   if (!live(state.itens).some((i) => i.id === c.itemId)) throw new Error("Item não encontrado");
   const mov = stamp({ id: id(), itemId: c.itemId, tipo: "contagem", quantidade: c.quantidade, data: c.data, gastoId: null }, now);
@@ -236,24 +243,35 @@ export function estoqueDe(state, hoje) {
       consumo,
       consumoEfetivo,
       situacao: situacaoDoItem(movimentos),
-      estimativa: estimarEstoque(movimentos, consumoEfetivo, hoje, item.alertaDias ?? 7),
+      // a abertura só marca o início do uso: não é entrada nem contagem de estoque
+      estimativa: estimarEstoque(movimentos.filter((m) => m.tipo !== "abertura"), consumoEfetivo, hoje, item.alertaDias ?? 7),
     };
   });
 }
 
-/** { tipo: "vazio" | "em_uso" | "acabou", desde, comprado, acabouEm }. "Em uso" conta desde a primeira compra depois do último "acabou". */
+/**
+ * { tipo: "vazio" | "em_uso" | "acabou", desde, comprado, acabouEm, aberto }.
+ * "Em uso" conta desde a primeira compra depois do último "acabou". `aberto` é o pacote em uso agora
+ * ({ desde, pacote }, somando pacotes abertos antes de acabar o primeiro) ou null.
+ */
 export function situacaoDoItem(movimentos) {
   let desde = null;
   let comprado = 0;
   let acabouEm = null;
+  let aberto = null;
   for (const m of movimentos) {
     if (m.tipo === "contagem" && m.quantidade === 0) {
       acabouEm = m.data;
       desde = null;
       comprado = 0;
+      aberto = null;
     } else if (m.tipo === "compra") {
       desde ??= m.data;
       comprado += m.quantidade;
+      acabouEm = null;
+    } else if (m.tipo === "abertura") {
+      aberto = aberto ? { desde: aberto.desde, pacote: aberto.pacote + m.quantidade } : { desde: m.data, pacote: m.quantidade };
+      desde ??= m.data;
       acabouEm = null;
     } else {
       desde = m.data;
@@ -261,9 +279,9 @@ export function situacaoDoItem(movimentos) {
       acabouEm = null;
     }
   }
-  if (movimentos.length === 0) return { tipo: "vazio", desde: null, comprado: 0, acabouEm: null };
-  if (acabouEm) return { tipo: "acabou", desde: null, comprado: 0, acabouEm };
-  return { tipo: "em_uso", desde, comprado, acabouEm: null };
+  if (movimentos.length === 0) return { tipo: "vazio", desde: null, comprado: 0, acabouEm: null, aberto: null };
+  if (acabouEm) return { tipo: "acabou", desde: null, comprado: 0, acabouEm, aberto: null };
+  return { tipo: "em_uso", desde, comprado, acabouEm: null, aberto };
 }
 
 // ---------- Gastos ----------

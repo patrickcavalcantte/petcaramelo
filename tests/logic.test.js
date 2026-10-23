@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   emptyState, hasUserData, addGatos, updateGato, setGatoAtivo, deleteGato, registrarEventos, deleteEvento,
-  addAnexo, criarItem, registrarCompra, registrarContagem, estoqueDe, comprarItem, categoriaPorNome, situacaoDoItem, arquivarItem, criarGasto, deleteGasto, gastosDoMes,
+  addAnexo, abrirPacote, criarItem, registrarCompra, registrarContagem, estoqueDe, comprarItem, categoriaPorNome, situacaoDoItem, arquivarItem, criarGasto, deleteGasto, gastosDoMes,
   eventosDoGato, ultimoPeso, titulosUsados, eventosParaVencimento, gatosAtivos, todosGatos, anexosVivos,
   mergeStates, createStore,
 } from "../js/logic.js";
@@ -204,10 +204,65 @@ describe("comprar pelo nome e acabar", () => {
   });
 
   test("situação do item", () => {
-    assert.deepEqual(situacaoDoItem([]), { tipo: "vazio", desde: null, comprado: 0, acabouEm: null });
+    assert.deepEqual(situacaoDoItem([]), { tipo: "vazio", desde: null, comprado: 0, acabouEm: null, aberto: null });
     const compras = [{ tipo: "compra", data: "2026-10-01", quantidade: 5 }, { tipo: "compra", data: "2026-10-10", quantidade: 5 }];
-    assert.deepEqual(situacaoDoItem(compras), { tipo: "em_uso", desde: "2026-10-01", comprado: 10, acabouEm: null });
+    assert.deepEqual(situacaoDoItem(compras), { tipo: "em_uso", desde: "2026-10-01", comprado: 10, acabouEm: null, aberto: null });
     assert.equal(situacaoDoItem([...compras, { tipo: "contagem", data: "2026-10-20", quantidade: 0 }]).tipo, "acabou");
+  });
+});
+
+describe("abri o pacote", () => {
+  const compra = (o) => ({ nome: "Ração", unidade: "kg", quantidade: 30, data: "2026-09-01", ...o });
+  const base = () => {
+    const s = comprarItem(emptyState(), compra(), T0, contador());
+    return { s, id: s.itens[0].id };
+  };
+
+  test("abrir guarda a data e o tamanho do pacote, e não conta como estoque", () => {
+    const { s, id } = base();
+    const r = abrirPacote(s, { itemId: id, quantidade: 15, data: "2026-09-10" }, T1, contador());
+    const [i] = estoqueDe(r, "2026-09-20");
+    assert.deepEqual(i.situacao.aberto, { desde: "2026-09-10", pacote: 15 });
+    assert.equal(i.estimativa.quantidade, 30); // continua 30: só a compra entra na conta do estoque
+  });
+
+  test("a média usa abrir → acabou, não a data da compra", () => {
+    const { s, id } = base(); // comprou 30 kg, mas só abriu o primeiro saco semanas depois
+    let r = abrirPacote(s, { itemId: id, quantidade: 15, data: "2026-09-21" }, T1, contador());
+    r = registrarContagem(r, { itemId: id, quantidade: 0, data: "2026-10-21" }, T2, contador());
+    const [i] = estoqueDe(r, "2026-10-22");
+    assert.equal(i.consumo.porDia, 0.5); // 15 kg em 30 dias (e não 30 kg em 50)
+    assert.equal(i.consumo.periodos, 1);
+    assert.equal(i.situacao.tipo, "acabou");
+  });
+
+  test("abrir outro pacote antes de acabar o primeiro soma os dois, sem reiniciar a contagem", () => {
+    const { s, id } = base();
+    let r = abrirPacote(s, { itemId: id, quantidade: 10, data: "2026-09-01" }, T1, contador());
+    r = abrirPacote(r, { itemId: id, quantidade: 10, data: "2026-09-11" }, T1, contador());
+    r = registrarContagem(r, { itemId: id, quantidade: 0, data: "2026-09-21" }, T2, contador());
+    assert.equal(estoqueDe(r, "2026-09-22")[0].consumo.porDia, 1); // 20 kg em 20 dias
+  });
+
+  test("depois de acabar, um novo pacote aberto começa outro ciclo", () => {
+    const { s, id } = base();
+    let r = abrirPacote(s, { itemId: id, quantidade: 10, data: "2026-09-01" }, T0, contador());
+    r = registrarContagem(r, { itemId: id, quantidade: 0, data: "2026-09-11" }, T0, contador()); // 1 kg/dia
+    r = abrirPacote(r, { itemId: id, quantidade: 10, data: "2026-09-16" }, T1, contador());
+    r = registrarContagem(r, { itemId: id, quantidade: 0, data: "2026-09-31".replace("31","30") }, T2, contador()); // 10 kg em 14 dias
+    const m = estoqueDe(r, "2026-10-01")[0].consumo;
+    assert.equal(m.periodos, 2);
+    assert.equal(Math.round(m.porDia * 1000), 833); // 20 kg em 24 dias
+  });
+
+  test("sem acabar, ainda não há média; o ciclo em andamento não entra", () => {
+    const { s, id } = base();
+    const r = abrirPacote(s, { itemId: id, quantidade: 15, data: "2026-09-10" }, T1, contador());
+    assert.equal(estoqueDe(r, "2026-10-01")[0].consumo, null);
+  });
+
+  test("abrir pacote de item que não existe falha", () => {
+    assert.throws(() => abrirPacote(emptyState(), { itemId: "x", quantidade: 1, data: "2026-10-01" }, T0));
   });
 });
 

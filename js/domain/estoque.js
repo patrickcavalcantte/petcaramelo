@@ -86,6 +86,39 @@ export function consumoObservado(movimentos) {
  * Devolve { porDia, dias, consumido, periodos } ou null se ainda não houver trecho fechado.
  */
 export function consumoMedio(movimentos) {
+  // Se a pessoa usa "Abri o pacote", o ciclo vai da abertura até o "acabou" e o consumo é o tamanho do pacote.
+  if (movimentos.some((m) => m.tipo === "abertura")) return consumoPorAbertura(movimentos);
+  return consumoPorCompra(movimentos);
+}
+
+/**
+ * Modo "Abri o pacote": cada abertura soma o tamanho do pacote ao ciclo em andamento (abrir outro antes de acabar o
+ * primeiro não reinicia a contagem); "acabou" (contagem 0) fecha o ciclo: consumido = soma dos pacotes, dias = da
+ * primeira abertura até o acabou. Compras e contagens no meio não entram: o que vale é quando o pacote foi aberto.
+ */
+function consumoPorAbertura(movimentos) {
+  let ciclo = null; // { inicio, total }
+  let consumido = 0;
+  let dias = 0;
+  let periodos = 0;
+  for (const m of ordenar(movimentos)) {
+    if (m.tipo === "abertura") {
+      ciclo = ciclo ? { ...ciclo, total: ciclo.total + m.quantidade } : { inicio: m.data, total: m.quantidade };
+    } else if (m.tipo === "contagem" && m.quantidade === 0 && ciclo) {
+      const d = diasEntre(ciclo.inicio, m.data);
+      if (d > 0) {
+        consumido += ciclo.total;
+        dias += d;
+        periodos += 1;
+      }
+      ciclo = null;
+    }
+  }
+  if (dias === 0) return null;
+  return { porDia: consumido / dias, dias, consumido, periodos };
+}
+
+function consumoPorCompra(movimentos) {
   let ancora = null; // { qtd, inicio } ; inicio null = estoque zerado, a contagem de dias começa na próxima compra
   let compras = 0;
   let consumido = 0;

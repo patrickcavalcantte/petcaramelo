@@ -1,7 +1,7 @@
 // Telas: funções puras que devolvem HTML. Sem DOM, sem estado global; o app.js decide quando e onde desenhar.
 // Todo texto que vem do usuário passa por esc().
 import { esc } from "./dom.js";
-import { formatarData, idade, deslocarMes, nomeDoMes, diasEntre } from "./domain/datas.js";
+import { formatarData, idade, deslocarMes, nomeDoMes, diasEntre, somarDias } from "./domain/datas.js";
 import { formatarReais } from "./domain/dinheiro.js";
 import { CATEGORIAS_GASTO, resumirGastos } from "./domain/gastos.js";
 import { calcularVencimentos } from "./domain/vencimentos.js";
@@ -316,6 +316,9 @@ export function viewCuidado(state, hoje, flash) {
 
 const SELO = { sem_dados: "", ok: "em uso", baixo: "acabando", acabou: "acabou" };
 
+/** Tamanho da última compra ou pacote aberto: sugestão para o próximo pacote. */
+const ultimaCompra = (i) => [...i.movimentos].reverse().find((m) => m.tipo === "compra" || m.tipo === "abertura")?.quantidade ?? "";
+
 function cartaoItem(i, hoje, nGatos) {
   const { situacao: s, estimativa: e, consumo: media } = i;
   const campoItem = `<input type="hidden" name="itemId" value="${esc(i.id)}">`;
@@ -327,11 +330,20 @@ function cartaoItem(i, hoje, nGatos) {
   } else if (s.tipo === "acabou") {
     estado = `<p><strong>Acabou em ${formatarData(s.acabouEm)}.</strong> Quando comprar de novo, registre a compra acima.</p>`;
   } else {
-    const dias = diasEntre(s.desde, hoje);
-    const previsao = i.consumoEfetivo > 0 && e.quantidade !== null
-      ? ` Sobram ≈ ${formatarQuantidade(e.quantidade, i.unidade)}${e.acabaEm ? `, deve acabar por volta de ${formatarData(e.acabaEm)}` : ""}.`
-      : "";
-    estado = `<p>Em uso desde ${formatarData(s.desde)} (${dias === 0 ? "hoje" : dias === 1 ? "1 dia" : `${dias} dias`}): comprou ${formatarQuantidade(s.comprado, i.unidade)}.${previsao}</p>`;
+    const quando = (n) => (n === 0 ? "hoje" : n === 1 ? "1 dia" : `${n} dias`);
+    if (s.aberto) {
+      const dias = diasEntre(s.aberto.desde, hoje);
+      let previsao = "";
+      if (i.consumoEfetivo > 0) {
+        const fim = somarDias(s.aberto.desde, Math.round(s.aberto.pacote / i.consumoEfetivo));
+        previsao = diasEntre(hoje, fim) >= 0
+          ? ` Pelo consumo médio, deve acabar por volta de ${formatarData(fim)}.`
+          : ` Pelo consumo médio já era para ter acabado. Se acabou, toque em “Acabou”.`;
+      }
+      estado = `<p><strong>Pacote aberto em ${formatarData(s.aberto.desde)}</strong> (${quando(dias)}): ${formatarQuantidade(s.aberto.pacote, i.unidade)}.${previsao}</p>`;
+    } else {
+      estado = `<p>Comprou ${formatarQuantidade(s.comprado, i.unidade)} (desde ${formatarData(s.desde)}). <strong>Ainda sem pacote aberto.</strong> Quando abrir um, toque em “Abri o pacote” para marcar a data.</p>`;
+    }
   }
 
   const blocoMedia = media
@@ -346,31 +358,37 @@ function cartaoItem(i, hoje, nGatos) {
         <small>Calculado em ${media.periodos} ${media.periodos === 1 ? "período" : "períodos"} (${media.dias} dias, ${formatarConsumo(media.consumido, i.unidade)})${nGatos > 0 ? `, dividido por ${nGatos} ${nGatos === 1 ? "gato ativo" : "gatos ativos"} hoje` : ""}. Cada vez que você marca “Acabou”, a média se atualiza.</small>
       </div>`
     : s.tipo !== "vazio"
-      ? `<p class="suave">Quando acabar, toque em “Acabou” para ver quanto os gatos consomem.</p>`
+      ? `<p class="suave">Marque “Abri o pacote” e, quando acabar, “Acabou”: assim o app vê quanto os gatos consomem.</p>`
       : "";
 
-  const selo = s.tipo === "em_uso" ? (SELO[e.status] || "em uso") : s.tipo === "acabou" ? "acabou" : "";
+  // Pacote aberto depois de um "acabou": a estimativa de estoque ainda não sabe disso, então não mostra "acabou".
+  const status = s.tipo === "acabou" ? "acabou" : s.aberto && e.status === "acabou" ? "ok" : e.status;
+  const selo = s.tipo === "em_uso" ? (SELO[status] || "em uso") : s.tipo === "acabou" ? "acabou" : "";
 
-  return `<section class="bloco item-estoque" data-status="${s.tipo === "acabou" ? "acabou" : e.status}">
+  return `<section class="bloco item-estoque" data-status="${status}">
     <header><h2>${nomeEsc}</h2>${selo ? `<span class="selo">${selo}</span>` : ""}</header>
     ${estado}
     ${blocoMedia}
     <div class="acoes-item">
+      ${s.tipo !== "vazio" ? `<details${s.tipo === "em_uso" && !s.aberto ? " open" : ""}><summary>Abri o pacote</summary><form data-acao="abertura" class="form">${campoItem}
+        <div class="linha-campos"><label>Dia em que abriu <input type="date" name="data" value="${hoje}" max="${hoje}" required></label>
+          <label>Tamanho do pacote (${esc(i.unidade)}) <input name="quantidade" inputmode="decimal" required value="${esc(String(ultimaCompra(i)).replace(".", ","))}"></label></div>
+        ${slotErro}<button class="botao" type="submit">Salvar abertura</button></form></details>` : ""}
       ${s.tipo === "em_uso" ? `<details><summary>Acabou</summary><form data-acao="acabou" class="form">${campoItem}
-        <label>Dia em que acabou <input type="date" name="data" value="${hoje}" max="${hoje}" min="${esc(s.desde)}" required></label>
+        <label>Dia em que acabou <input type="date" name="data" value="${hoje}" max="${hoje}" min="${esc(s.aberto?.desde ?? s.desde)}" required></label>
         ${slotErro}<button class="botao" type="submit">Acabou</button></form></details>` : ""}
       <button type="button" class="link-botao" data-click="comprar-de-novo" data-nome="${nomeEsc}" data-unidade="${esc(i.unidade)}">Comprei mais</button>
       <details><summary>Mais opções</summary>
         <form data-acao="contagem" class="form">${campoItem}
           <div class="linha-campos"><label>Contei, tem agora (${esc(i.unidade)}) <input name="quantidade" inputmode="decimal" required></label>
             <label>Data <input type="date" name="data" value="${hoje}" max="${hoje}" required></label></div>
-          <small>Se você conferiu o que sobrou no meio do caminho, o app usa isso para acertar a média.</small>
+          <small>Para conferir o que sobrou. Se você usa “Abri o pacote”, a média vem da data de abertura e do “Acabou”, não desta contagem.</small>
           ${slotErro}<button class="botao botao-secundario" type="submit">Registrar contagem</button></form>
         <button type="button" class="link-botao perigo" data-click="item-arquivar" data-id="${esc(i.id)}">Arquivar item</button>
       </details>
     </div>
     ${i.movimentos.length > 0 ? `<details><summary>Histórico</summary><ul class="lista-simples">${i.movimentos.slice(-10).reverse().map((m) => `<li>
-      ${formatarData(m.data)}: ${m.tipo === "compra" ? `comprou ${formatarQuantidade(m.quantidade, i.unidade)}` : m.quantidade === 0 ? "acabou" : `contou ${formatarQuantidade(m.quantidade, i.unidade)}`}
+      ${formatarData(m.data)}: ${m.tipo === "compra" ? `comprou ${formatarQuantidade(m.quantidade, i.unidade)}` : m.tipo === "abertura" ? `abriu pacote de ${formatarQuantidade(m.quantidade, i.unidade)}` : m.quantidade === 0 ? "acabou" : `contou ${formatarQuantidade(m.quantidade, i.unidade)}`}
       <button type="button" class="link-botao perigo" data-click="mov-apagar" data-id="${esc(m.id)}">apagar</button></li>`).join("")}</ul></details>` : ""}
   </section>`;
 }
@@ -381,7 +399,7 @@ export function viewEstoque(state, hoje, flash) {
   const primeira = itens.length === 0;
 
   return `<h1>Estoque</h1>
-    <p class="suave">Registre o que comprou. Quando acabar, toque em “Acabou” e o app calcula quanto os gatos consomem.</p>
+    <p class="suave">Registre o que comprou. Quando abrir um pacote, marque a data; quando acabar, toque em “Acabou”. O app calcula quanto os gatos consomem.</p>
     ${aviso(flash)}
     <section class="bloco"><h2>Comprei</h2>
       <form data-acao="compra" class="form">

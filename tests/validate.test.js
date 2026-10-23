@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
-  validarGato, validarEvento, validarCompra, validarContagem, validarGasto,
+  validarGato, validarEvento, validarCompra, validarAbertura, validarContagem, validarGasto,
   validarArquivo, validarCadastro,
 } from "../js/validate.js";
 
@@ -65,6 +65,13 @@ describe("estoque e gastos", () => {
     assert.equal(validarCompra({ nome: "R", quantidade: "0", data: "2026-10-01" }, HOJE).erro, "Quantidade precisa ser maior que zero");
     assert.equal(validarCompra({ nome: "R", quantidade: "1", unidade: "ton", data: "2026-10-01" }, HOJE).erro, "Escolha a unidade");
     assert.equal(validarCompra({ nome: "R", quantidade: "1", data: "2026-12-01" }, HOJE).erro, "A data não pode ser no futuro");
+  });
+  test("abertura de pacote exige tamanho e data válidos", () => {
+    const r = validarAbertura({ itemId: "i", quantidade: "15", data: "2026-10-01" }, HOJE);
+    assert.equal(r.valor.quantidade, 15);
+    assert.equal(validarAbertura({ itemId: "i", quantidade: "", data: "2026-10-01" }, HOJE).erro, "Informe o tamanho do pacote");
+    assert.equal(validarAbertura({ itemId: "i", quantidade: "0", data: "2026-10-01" }, HOJE).erro, "O pacote precisa ter mais que zero");
+    assert.equal(validarAbertura({ itemId: "i", quantidade: "5", data: "2026-12-01" }, HOJE).erro, "A data não pode ser no futuro");
   });
   test("contagem aceita zero", () => {
     assert.equal(validarContagem({ itemId: "i", quantidade: "0", data: "2026-10-01" }, HOJE).valor.quantidade, 0);

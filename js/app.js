@@ -5,10 +5,10 @@ import { hojeISO } from "./domain/datas.js";
 import {
   emptyState, hasUserData, createStore, mergeStates, gatosAtivos, todosGatos, anexosVivos,
   addGatos, updateGato, setGatoAtivo, deleteGato, registrarEventos, deleteEvento, addAnexo, deleteAnexo,
-  comprarItem, arquivarItem, registrarContagem, deleteMovimento, criarGasto, deleteGasto,
+  comprarItem, abrirPacote, arquivarItem, registrarContagem, deleteMovimento, criarGasto, deleteGasto,
 } from "./logic.js";
 import {
-  validarGato, validarEvento, validarCompra, validarContagem, validarGasto,
+  validarGato, validarEvento, validarCompra, validarAbertura, validarContagem, validarGasto,
   validarArquivo, validarCadastro,
 } from "./validate.js";
 import {
@@ -310,6 +310,13 @@ const ACOES = {
     if (r.erro) return mostrarErro(form, r.erro);
     pronto("Contagem registrada");
     commit(registrarContagem(state, r.valor, agora()));
+  },
+
+  abertura(form, f) {
+    const r = validarAbertura(f, hojeISO());
+    if (r.erro) return mostrarErro(form, r.erro);
+    pronto("Pacote aberto registrado. Quando acabar, toque em Acabou.");
+    commit(abrirPacote(state, r.valor, agora()));
   },
 
   /** "Acabou" é uma contagem com zero: fecha o período e alimenta a média real. */

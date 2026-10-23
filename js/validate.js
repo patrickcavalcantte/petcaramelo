@@ -143,6 +143,15 @@ export function validarCompra(f, hoje) {
   });
 }
 
+/** Pacote aberto: data e tamanho do pacote. */
+export function validarAbertura(f, hoje) {
+  return validar(() => {
+    const quantidade = numero(f.quantidade, "Informe o tamanho do pacote");
+    if (!(quantidade > 0 && quantidade < 1_000_000)) falha("O pacote precisa ter mais que zero");
+    return { itemId: str(f.itemId), quantidade, data: data(f.data, { obrigatoria: true, naoFutura: hoje }) };
+  });
+}
+
 export function validarContagem(f, hoje) {
   return validar(() => {
     const quantidade = numero(f.quantidade, "Quantidade inválida");
