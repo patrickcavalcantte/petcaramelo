@@ -12,12 +12,15 @@ create table if not exists public.app_state (
 alter table public.app_state enable row level security;
 
 -- Cada conta só enxerga e altera a própria linha.
+drop policy if exists "le o proprio estado" on public.app_state;
 create policy "le o proprio estado" on public.app_state
   for select to authenticated using (user_id = (select auth.uid()));
 
+drop policy if exists "cria o proprio estado" on public.app_state;
 create policy "cria o proprio estado" on public.app_state
   for insert to authenticated with check (user_id = (select auth.uid()));
 
+drop policy if exists "atualiza o proprio estado" on public.app_state;
 create policy "atualiza o proprio estado" on public.app_state
   for update to authenticated
   using (user_id = (select auth.uid()))
