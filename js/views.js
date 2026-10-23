@@ -7,6 +7,7 @@ import { CATEGORIAS_GASTO, resumirGastos } from "./domain/gastos.js";
 import { calcularVencimentos } from "./domain/vencimentos.js";
 import { formatarConsumo, formatarPeso, formatarQuantidade, textoPrazo } from "./domain/formato.js";
 import { TIPOS_EVENTO } from "./validate.js";
+import { PASSOS, ehUltimo } from "./tour.js";
 import {
   gatosAtivos, todosGatos, eventosDoGato, ultimoPeso, titulosUsados, eventosParaVencimento,
   anexosVivos, estoqueDe, gastosDoMes, gastosVivos,
@@ -462,17 +463,65 @@ export function viewGastos(state, hoje, mesPedido, flash) {
 // ---------- Conta ----------
 
 export function viewConta({ signedIn, email }, flash) {
+  const galera = `<section class="bloco" id="galera"><h2>Galera compartilhada</h2>
+        <p class="suave">Quem estiver na Galera vê e edita os mesmos gatos, estoque e gastos. Cada um entra com a própria conta.</p>
+        <ul id="membros" class="lista-simples" aria-live="polite"><li class="suave">Carregando…</li></ul>
+        <div class="form">
+          <button type="button" class="botao botao-secundario" data-click="convite-novo">Convidar alguém</button>
+          <div id="convite-resultado" class="convite" role="status" hidden></div>
+        </div>
+        <details><summary>Entrar na Galera de outra pessoa</summary>
+          <form data-acao="convite-aceitar" class="form">
+            <label>Código do convite <input name="codigo" autocomplete="off" autocapitalize="characters" spellcheck="false" required placeholder="ABCD-EF23"></label>
+            <small>Os dados que esta conta tem hoje serão descartados e você passa a ver os da Galera do convite.</small>
+            ${slotErro}
+            <button class="botao" type="submit">Entrar na Galera</button>
+          </form></details>
+        <button type="button" class="link-botao perigo" id="btn-sair-galera" data-click="galera-sair" hidden>Sair desta Galera</button>
+      </section>`;
   return `<h1>Conta</h1>${aviso(flash)}
     ${signedIn ? `<section class="bloco"><h2>${esc(email)}</h2>
-        <p class="suave">Seus dados ficam neste aparelho e são copiados para a sua conta, para você abrir em outro celular. Só você enxerga o que está lá.</p>
+        <p class="suave">Seus dados ficam neste aparelho e são copiados para a Galera na nuvem, para você abrir em outro celular.</p>
         <button type="button" class="botao botao-secundario" data-click="sair">Sair</button></section>
+      ${galera}
       <section class="bloco zona-perigo"><h2>Excluir conta</h2>
-        <p class="suave">Apaga a conta, todos os gatos, o histórico, o estoque, os gastos e os documentos. Não dá para desfazer.</p>
-        <button type="button" class="botao botao-perigo" data-click="excluir-conta">Excluir minha conta e meus dados</button>
+        <p class="suave">Apaga a sua conta. Se você for a única pessoa da Galera, apaga também todos os gatos, o histórico, o estoque, os gastos e os documentos; se houver mais gente, a Galera continua com eles. Não dá para desfazer.</p>
+        <button type="button" class="botao botao-perigo" data-click="excluir-conta">Excluir minha conta</button>
         <p class="aviso aviso-erro" role="alert" data-erro hidden></p></section>`
       : `<section class="bloco"><h2>Só neste aparelho</h2>
-        <p class="suave">Você está usando o app sem conta. Os dados ficam só neste navegador: limpar os dados do site ou trocar de celular apaga tudo.</p>
+        <p class="suave">Você está usando o app sem conta. Os dados ficam só neste navegador: limpar os dados do site ou trocar de celular apaga tudo. Com uma conta você também pode compartilhar a Galera com outra pessoa.</p>
         <a class="botao" href="#/entrar">Entrar ou criar conta</a></section>`}
+    <section class="bloco"><h2>Primeiros passos</h2>
+      <p class="suave">Quer rever a apresentação do app?</p>
+      <a class="botao botao-secundario" href="#/boas-vindas">Ver o passeio de novo</a></section>
     <section class="bloco"><h2>Privacidade</h2>
-      <p class="suave">O app guarda o que você registra: nomes e dados dos gatos, vacinas, consultas, exames, estoque, gastos e documentos. Nada é vendido nem compartilhado. Com conta, os dados ficam no Supabase, isolados por usuário (cada conta só lê as próprias linhas e os próprios arquivos). Sem conta, ficam só no seu navegador.</p></section>`;
+      <p class="suave">O app guarda o que você registra: nomes e dados dos gatos, vacinas, consultas, exames, estoque, gastos e documentos. Nada é vendido. Com conta, os dados ficam no Supabase e só quem está na sua Galera consegue ler ou alterar (as regras valem no próprio banco). Sem conta, ficam só no seu navegador.</p></section>`;
+}
+
+// ---------- Onboarding ----------
+
+export function viewTour(n) {
+  const p = PASSOS[n];
+  const total = PASSOS.length;
+  const ultimo = ehUltimo(n);
+  const pontos = PASSOS.map((_, i) => `<span class="tour-ponto${i === n ? " ativo" : ""}"></span>`).join("");
+  return `<main class="tour" aria-labelledby="tour-titulo">
+    <header class="tour-topo">
+      <span class="tour-marca">${PATA}Pet Caramelo</span>
+      ${ultimo ? "" : `<button type="button" class="link-botao" data-click="tour-pular">Pular</button>`}
+    </header>
+    <div class="tour-corpo">
+      <div class="tour-icone" aria-hidden="true">${p.icone}</div>
+      <p class="tour-passo">Passo ${n + 1} de ${total}</p>
+      <h1 id="tour-titulo">${esc(p.titulo)}</h1>
+      ${p.texto.map((t) => `<p>${esc(t)}</p>`).join("")}
+      ${p.fluxo ? `<ol class="tour-fluxo" aria-label="Sequência">${p.fluxo.map((e) => `<li>${esc(e)}</li>`).join("")}</ol>` : ""}
+      ${p.dicas ? `<ul class="tour-dicas">${p.dicas.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}
+    </div>
+    <div class="tour-pontos" role="img" aria-label="Passo ${n + 1} de ${total}">${pontos}</div>
+    <footer class="tour-rodape">
+      ${n > 0 ? `<button type="button" class="botao botao-secundario" data-click="tour-volta">Voltar</button>` : `<span></span>`}
+      <button type="button" class="botao" data-click="${ultimo ? "tour-fim" : "tour-prox"}">${ultimo ? "Começar" : "Próximo"}</button>
+    </footer>
+  </main>`;
 }

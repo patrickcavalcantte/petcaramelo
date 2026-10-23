@@ -13,8 +13,11 @@ import {
 } from "./validate.js";
 import {
   viewLogin, viewCadastro, viewEsqueci, viewNovaSenha, shell, viewPainel, viewGatos, viewGato,
-  viewCuidado, viewEstoque, viewGastos, viewConta,
+  viewCuidado, viewEstoque, viewGastos, viewConta, viewTour,
 } from "./views.js";
+import { reconciliar, normalizarCodigo, formatarCodigo } from "./reconcile.js";
+import { precisaTour, marcarTour, passoSeguinte, passoAnterior } from "./tour.js";
+import { esc } from "./dom.js";
 
 const root = document.getElementById("root");
 const OWNER_KEY = "pet-caramelo:dono"; // de quem são os dados deste aparelho
@@ -36,19 +39,24 @@ function setSync(texto) {
   if (el) el.textContent = texto;
 }
 
-const textoSyncOcioso = () => (sync.signedIn() ? "Sincronizado com a sua conta" : "Só neste aparelho");
+const textoSyncOcioso = () => (sync.signedIn() ? "Sincronizado com a Galera" : "Só neste aparelho");
 
 /** Guarda no aparelho e agenda o envio para a conta. */
 function commit(next, redraw = true) {
   state = { ...next, savedAt: new Date().toISOString() };
   if (!store.save(state)) console.warn("Não foi possível salvar. O que você registrar fica só nesta aba.");
-  if (sync.signedIn()) setSync("Sincronizando…");
-  sync.schedulePush(
-    state,
-    (err) => { console.warn("Não foi possível sincronizar agora.", err); setSync("Não consegui sincronizar. Tento de novo na próxima alteração."); },
-    () => setSync(textoSyncOcioso()),
-  );
+  agendarSync();
   if (redraw) render();
+}
+
+/** Sincroniza daqui a 1 s (junta o que a outra pessoa fez e envia o que eu fiz). Redesenha se vier algo novo. */
+function agendarSync() {
+  if (!sync.signedIn()) return;
+  setSync("Sincronizando…");
+  sync.agendar(async () => {
+    const mudou = await reconcile(false);
+    if (mudou && !emFoco()) render();
+  });
 }
 
 /**
@@ -76,18 +84,24 @@ function settleLocalOwnership(askAdopt) {
   } catch { /* sem storage: segue sem a marca */ }
 }
 
-/** Junta o que está neste aparelho com o que está na conta e grava o resultado nos dois lados. Devolve true se mudou algo aqui. */
+/**
+ * Junta o que está neste aparelho com o que está na Galera (na nuvem) e grava o resultado nos dois lados.
+ * Devolve true se a nuvem trouxe algo novo para cá. Com duas pessoas gravando, a gravação confere a versão
+ * e, se a outra pessoa chegou antes, baixa e junta de novo (ver reconcile.js).
+ */
 async function reconcile(askAdopt = false) {
   try {
     settleLocalOwnership(askAdopt);
-    const remote = await sync.pull();
-    const merged = mergeStates(state, remote);
-    const changedHere = JSON.stringify(merged) !== JSON.stringify(state);
-    state = merged;
-    if (changedHere) store.save(state);
-    if (!remote || JSON.stringify(merged) !== JSON.stringify(remote)) await sync.push(state);
+    await sync.garantirGalera(state);
+    const { mudouAqui } = await reconciliar({
+      local: () => state,
+      pull: sync.pull,
+      push: sync.push,
+      merge: mergeStates,
+      gravarLocal: (s) => { state = s; store.save(state); },
+    });
     setSync(textoSyncOcioso());
-    return changedHere;
+    return mudouAqui;
   } catch (err) {
     console.warn("Não foi possível sincronizar agora. O app segue com os dados deste aparelho.", err);
     setSync("Sem sincronização agora. O app segue com os dados deste aparelho.");
@@ -130,6 +144,15 @@ function render() {
     return;
   }
 
+  // Onboarding: tela cheia, sem o menu. Entrar de novo nele (pelo link da Conta) recomeça do primeiro passo.
+  if (p0 === "boas-vindas") {
+    if (ultimaRota !== "boas-vindas") tourPasso = 0;
+    ultimaRota = p0;
+    root.innerHTML = viewTour(tourPasso);
+    return;
+  }
+  ultimaRota = p0;
+
   const sessao = { signedIn: sync.signedIn(), email: sync.email(), estadoSync: syncText || textoSyncOcioso() };
   const podeAnexar = sync.signedIn();
   let nome = p0;
@@ -146,6 +169,31 @@ function render() {
   }
   root.innerHTML = shell(nome, html, sessao);
   resolverDocumentos();
+  if (p0 === "conta" && sync.signedIn()) carregarMembros();
+}
+
+let tourPasso = 0; // passo do onboarding em exibição
+let ultimaRota = null;
+
+/** Quem é a pessoa que o app lembra de já ter mostrado o passeio: a conta, ou "local" sem conta. */
+const quemViuTour = () => sync.userId() ?? "local";
+
+/** Quem está na Galera, na página da Conta. */
+async function carregarMembros() {
+  const lista = document.getElementById("membros");
+  if (!lista) return;
+  try {
+    if (!sync.galera()) await sync.garantirGalera(state);
+    const membros = await sync.membros();
+    if (!document.getElementById("membros")) return; // a pessoa já saiu da página
+    lista.innerHTML = membros.map((m) => `<li>${esc(m.email)}${m.sou_eu ? ` <span class="suave">(você)</span>` : ""}</li>`).join("");
+    const sair = document.getElementById("btn-sair-galera");
+    if (sair) sair.hidden = membros.length < 2;
+    lista.dataset.total = String(membros.length);
+  } catch (err) {
+    console.warn("Não foi possível carregar a Galera.", err);
+    lista.innerHTML = `<li class="suave">Não consegui carregar agora. Verifique a conexão.</li>`;
+  }
 }
 
 /** Os documentos ficam num bucket privado: cada link é assinado na hora, vale 1 hora. */
@@ -224,6 +272,30 @@ const ACOES = {
     }
     pronto("Senha atualizada.");
     await entrouNaConta();
+  },
+
+  async "convite-aceitar"(form, f) {
+    const codigo = normalizarCodigo(f.codigo);
+    if (codigo.length !== 8) return mostrarErro(form, "O código tem 8 letras e números, como ABCD-EF23");
+    if (hasUserData(state) && !confirm("Entrar nessa Galera descarta os dados que esta conta tem hoje (gatos, histórico, estoque e gastos) e mostra os dela.\n\nContinuar?")) return;
+    const botao = form.querySelector("button[type=submit]");
+    botao.disabled = true;
+    try {
+      // Se esta conta estava sozinha na própria Galera, ela é descartada, e os documentos dela com ela.
+      if (!sync.galera()) await sync.garantirGalera(state);
+      const sozinha = (await sync.membros()).length <= 1;
+      if (sozinha) await sync.removeDocuments(anexosVivos(state).map((a) => a.storagePath)).catch(() => {});
+      await sync.aceitarConvite(codigo);
+    } catch (err) {
+      botao.disabled = false;
+      console.warn("Não foi possível entrar na Galera.", err);
+      return mostrarErro(form, /Convite|Galera/.test(err?.message ?? "") ? err.message : "Não consegui entrar agora. Confira o código e tente de novo.");
+    }
+    state = emptyState(); // passa a valer o da Galera nova
+    store.save(state);
+    await reconcile(false);
+    pronto("Você entrou na Galera. Os dados dela já estão aqui.");
+    irPara("#/");
   },
 
   "gatos-lote"(form, f) {
@@ -382,11 +454,27 @@ async function entrouNaConta() {
   localMode = false;
   try { localStorage.removeItem(LOCAL_KEY); } catch { /* ignorado */ }
   await reconcile(true);
-  irPara("#/");
+  proximaTela();
+}
+
+/** Primeira vez desta pessoa: o passeio. Depois: o painel. */
+function proximaTela() {
+  if (precisaTour(safeStorage(), quemViuTour())) {
+    tourPasso = 0;
+    irPara("#/boas-vindas");
+  } else {
+    irPara("#/");
+  }
+}
+
+/** Fim ou "pular" do passeio: não aparece de novo. Quem ainda não tem gatos vai direto cadastrar. */
+function terminarTour() {
+  marcarTour(safeStorage(), quemViuTour());
+  irPara(gatosAtivos(state).length === 0 ? "#/gatos" : "#/");
 }
 
 async function sair() {
-  try { await sync.push(state); } catch { /* sem rede: o que não subiu fica só neste aparelho */ }
+  await reconcile(false); // sem rede: o que não subiu fica só neste aparelho
   await sync.signOut().catch(() => {});
   limparAparelho();
   localMode = false;
@@ -399,7 +487,9 @@ async function excluirConta(botao) {
   if (!confirm("Excluir sua conta e todos os seus dados (gatos, histórico, estoque, gastos e documentos)?\n\nIsso não pode ser desfeito.")) return;
   botao.disabled = true;
   try {
-    await sync.deleteAccount(anexosVivos(state).map((a) => a.storagePath));
+    // Os documentos são da Galera: se há mais gente nela, ficam para os outros.
+    const sozinha = (await sync.membros()).length <= 1;
+    await sync.deleteAccount(sozinha ? anexosVivos(state).map((a) => a.storagePath) : []);
   } catch (err) {
     console.warn("Não foi possível excluir a conta agora.", err);
     botao.disabled = false;
@@ -430,6 +520,57 @@ const CLIQUES = {
   "modo-local"() {
     localMode = true;
     try { localStorage.setItem(LOCAL_KEY, "1"); } catch { /* vale só nesta sessão */ }
+    proximaTela();
+  },
+
+  "tour-prox": () => { tourPasso = passoSeguinte(tourPasso); render(); window.scrollTo(0, 0); },
+  "tour-volta": () => { tourPasso = passoAnterior(tourPasso); render(); window.scrollTo(0, 0); },
+  "tour-pular": () => terminarTour(),
+  "tour-fim": () => terminarTour(),
+
+  async "convite-novo"(el) {
+    const saida = document.getElementById("convite-resultado");
+    el.disabled = true;
+    try {
+      if (!sync.galera()) await sync.garantirGalera(state);
+      const codigo = formatarCodigo(await sync.criarConvite());
+      saida.innerHTML = `<p>Envie este código para quem vai entrar:</p>
+        <p class="convite-codigo">${esc(codigo)}</p>
+        <button type="button" class="link-botao" data-click="copiar-codigo" data-codigo="${esc(codigo)}">Copiar código</button>
+        <small>Vale por 7 dias e só pode ser usado uma vez. A pessoa entra no app com a conta dela, abre Conta e digita o código em “Entrar na Galera de outra pessoa”.</small>`;
+    } catch (err) {
+      console.warn("Não foi possível criar o convite.", err);
+      saida.textContent = "Não consegui gerar o convite agora. Tente de novo.";
+    } finally {
+      saida.hidden = false;
+      el.disabled = false;
+    }
+  },
+
+  async "copiar-codigo"(el) {
+    try {
+      await navigator.clipboard.writeText(el.dataset.codigo);
+      el.textContent = "Copiado!";
+    } catch {
+      el.textContent = "Não deu para copiar. Selecione o código acima.";
+    }
+  },
+
+  async "galera-sair"(el) {
+    if (!confirm("Sair desta Galera?\n\nVocê deixa de ver os dados dela e começa uma Galera nova, vazia. As outras pessoas continuam com tudo.")) return;
+    el.disabled = true;
+    try {
+      await reconcile(false); // não perder o que ainda não subiu
+      await sync.sairDaGalera();
+    } catch (err) {
+      console.warn("Não foi possível sair da Galera.", err);
+      el.disabled = false;
+      return mostrarErro(el.closest("section"), "Não consegui sair agora. Tente de novo.");
+    }
+    state = emptyState();
+    store.save(state);
+    await reconcile(false); // cria a Galera nova, vazia
+    pronto("Você saiu da Galera.");
     irPara("#/");
   },
   sair: () => sair(),
@@ -521,6 +662,12 @@ document.addEventListener("visibilitychange", async () => {
   if (await reconcile(false) && !emFoco()) render();
 });
 
+// Com a aba aberta, de minuto em minuto: o que a outra pessoa registrar aparece sem recarregar.
+setInterval(async () => {
+  if (document.visibilityState !== "visible" || !sync.signedIn() || emFoco() || menuAberto()) return;
+  if (await reconcile(false) && !emFoco()) render();
+}, 60_000);
+
 async function boot() {
   watchForUpdates();
   if (sync.enabled) {
@@ -536,6 +683,10 @@ async function boot() {
     flash = { tipo: "erro", msg: "Esse link expirou. Peça um novo em “Esqueci a senha”." };
   }
   syncText = textoSyncOcioso();
+  // Conta que ainda não viu o passeio (ex.: criada e confirmada por e-mail em outro momento).
+  if (sync.signedIn() && precisaTour(safeStorage(), quemViuTour()) && ["", "#", "#/"].includes(location.hash)) {
+    history.replaceState(null, "", "#/boas-vindas");
+  }
   render();
 }
 

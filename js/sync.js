@@ -1,13 +1,15 @@
-// Sincronização com o Supabase. Sem URL/chave em config.js, o app segue só com localStorage.
+// Login, Galera compartilhada e documentos no Supabase. Sem URL/chave em config.js, o app segue só com localStorage.
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 
 export const enabled = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
-// Laudos, receitas e carteirinhas: bucket privado, uma pasta por usuário e por gato (ver supabase/storage.sql).
+// Laudos, receitas e carteirinhas: bucket privado, uma pasta por Galera e por gato (ver supabase/storage.sql).
 const BUCKET = "documentos";
 
 let client = null;
 let user = null;
+let galeraId = null; // a Galera desta conta (cada conta participa de uma só)
+let versao = 0; // versão do estado que baixamos por último: a gravação só vale se ninguém gravou depois
 let timer = null;
 
 // O link de recuperação de senha volta para o app com type=recovery na URL.
@@ -27,6 +29,7 @@ async function getClient() {
 export const email = () => user?.email ?? null;
 export const userId = () => user?.id ?? null;
 export const signedIn = () => user !== null;
+export const galera = () => galeraId;
 
 /** Restaura a sessão salva neste aparelho. Devolve o usuário ou null. */
 export async function start() {
@@ -77,26 +80,82 @@ export async function signOut() {
   const c = await getClient();
   await c.auth.signOut();
   user = null;
+  galeraId = null;
+  versao = 0;
 }
 
+// ---------- Galera: o estado compartilhado ----------
+
+/** Descobre a Galera da conta; na primeira vez cria uma, já com o estado que a pessoa tinha no aparelho. */
+export async function garantirGalera(estadoLocal) {
+  if (galeraId) return galeraId;
+  const c = await getClient();
+  const { data, error } = await c.rpc("obter_ou_criar_galera", { p_state: estadoLocal });
+  if (error) throw error;
+  galeraId = data;
+  return galeraId;
+}
+
+/** Baixa o estado da Galera e guarda a versão dele. Devolve null se ainda não há. */
 export async function pull() {
   const c = await getClient();
-  const { data, error } = await c.from("app_state").select("state").eq("user_id", user.id).maybeSingle();
+  const { data, error } = await c.from("galera_estado").select("state, versao").eq("galera_id", galeraId).maybeSingle();
   if (error) throw error;
+  versao = data?.versao ?? 0;
   return data?.state ?? null;
 }
 
-export async function push(state) {
+/** Grava sobre a versão que baixamos. Devolve false se outra pessoa gravou antes (o app junta e tenta de novo). */
+export async function push(estado) {
   const c = await getClient();
-  const { error } = await c.from("app_state").upsert({ user_id: user.id, state, updated_at: new Date().toISOString() });
+  const { data, error } = await c.rpc("salvar_estado", { p_galera: galeraId, p_state: estado, p_versao: versao });
   if (error) throw error;
+  if (data === null) return false;
+  versao = data;
+  return true;
 }
 
-/** Envia depois de 1 s sem novas alterações, para não gravar a cada toque. */
-export function schedulePush(state, onError, onDone = () => {}) {
+/** Roda `fn` depois de 1 s sem novas alterações, para não sincronizar a cada toque. */
+export function agendar(fn) {
   if (!user) return;
   clearTimeout(timer);
-  timer = setTimeout(() => push(state).then(onDone, onError), 1000);
+  timer = setTimeout(fn, 1000);
+}
+
+// ---------- Galera: pessoas e convites ----------
+
+/** [{ user_id, email, sou_eu }] */
+export async function membros() {
+  const c = await getClient();
+  const { data, error } = await c.rpc("membros_da_galera", { p_galera: galeraId });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Gera um código de uso único, válido por 7 dias. */
+export async function criarConvite() {
+  const c = await getClient();
+  const { data, error } = await c.rpc("criar_convite", { p_galera: galeraId });
+  if (error) throw error;
+  return data;
+}
+
+/** Entra na Galera do convite. A Galera desta conta passa a ser a dele, então esquecemos a atual. */
+export async function aceitarConvite(codigo) {
+  const c = await getClient();
+  const { data, error } = await c.rpc("aceitar_convite", { p_codigo: codigo });
+  if (error) throw error;
+  galeraId = data;
+  versao = 0;
+  return galeraId;
+}
+
+export async function sairDaGalera() {
+  const c = await getClient();
+  const { error } = await c.rpc("sair_da_galera");
+  if (error) throw error;
+  galeraId = null;
+  versao = 0;
 }
 
 // ---------- Documentos ----------
@@ -104,7 +163,7 @@ export function schedulePush(state, onError, onDone = () => {}) {
 /** Envia o arquivo direto do navegador para o Storage. Devolve o caminho. */
 export async function uploadDocument(gatoId, file, mime, ext) {
   const c = await getClient();
-  const path = `${user.id}/${gatoId}/${crypto.randomUUID()}.${ext || "bin"}`;
+  const path = `${galeraId}/${gatoId}/${crypto.randomUUID()}.${ext || "bin"}`;
   const { error } = await c.storage.from(BUCKET).upload(path, file, { contentType: mime, upsert: false });
   if (error) throw error;
   return path;
@@ -126,8 +185,9 @@ export async function removeDocuments(paths) {
 }
 
 /**
- * Apaga a conta e tudo dela: os arquivos no Storage (o banco não apaga arquivos em cascata) e,
- * pela função delete_my_account (supabase/excluir-conta.sql), o usuário e a linha de app_state.
+ * Apaga a conta (pela função delete_my_account, supabase/excluir-conta.sql: sai da Galera e remove o usuário).
+ * `paths` são os arquivos a apagar antes: só passe quando a pessoa é a única da Galera, senão os documentos
+ * são dos outros também.
  */
 export async function deleteAccount(paths = []) {
   await removeDocuments(paths);
@@ -137,4 +197,6 @@ export async function deleteAccount(paths = []) {
   if (error) throw error;
   await c.auth.signOut().catch(() => {});
   user = null;
+  galeraId = null;
+  versao = 0;
 }
